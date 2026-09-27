@@ -1,8 +1,9 @@
 # Multi-Stage Build for Production app-engine
 # Stage 1: Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:alpine AS builder
 
 WORKDIR /src
+ENV GOTOOLCHAIN=auto
 RUN apk add --no-cache git ca-certificates
 
 COPY go.mod go.sum ./
