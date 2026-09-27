@@ -1,0 +1,171 @@
+version: "3.8"
+
+services:
+  # Infrastructure: Redis (Streams + Pub/Sub + WebRTC Session state)
+  redis:
+    image: redis:7.2-alpine
+    container_name: opsmaster-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - opsmaster-net
+
+  # Infrastructure: PostgreSQL (Incident post-mortems and medical alert logs)
+  postgres:
+    image: postgres:16-alpine
+    container_name: opsmaster-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: clinical_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d clinical_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - opsmaster-net
+
+  # Service 1: Vitals Ingress API (Go)
+  vitals-ingress-api:
+    build:
+      context: ./services/vitals-ingress-api
+      dockerfile: Dockerfile
+    container_name: vitals-ingress-api
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      REDIS_ADDR: "redis:6379"
+      REDIS_STREAM: "vitals:stream"
+      REDIS_CHANNEL: "vitals:telemetry"
+      SHUTDOWN_TIMEOUT_SECONDS: "10"
+      ENABLE_MOCK_REDIS_FALLBACK: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - opsmaster-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/livez"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Service 2: Alert Rules Engine (Python Streaming Worker)
+  alert-rules-engine:
+    build:
+      context: ./services/alert-rules-engine
+      dockerfile: Dockerfile
+    container_name: alert-rules-engine
+    ports:
+      - "8081:8081"
+    environment:
+      HTTP_PORT: "8081"
+      REDIS_ADDR: "redis:6379"
+      REDIS_STREAM: "vitals:stream"
+      REDIS_CONSUMER_GROUP: "alert_rules_engine_group"
+      REDIS_CONSUMER_NAME: "alert-worker-1"
+      DATABASE_URL: "postgresql://postgres:postgrespassword@postgres:5432/clinical_db"
+      WEBHOOK_URL: "http://clinical-devops-assistant:8083/api/v1/alerts/webhook"
+      SLIDING_WINDOW_SECONDS: "30"
+      SLIDING_WINDOW_MIN_SAMPLES: "2"
+      SHUTDOWN_TIMEOUT_SECONDS: "10"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - opsmaster-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/livez"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Service 3: Session Router (Node.js WebRTC Signaling)
+  session-router:
+    build:
+      context: ./services/session-router
+      dockerfile: Dockerfile
+    container_name: session-router
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_PREFIX: "opsmaster:session:"
+      SESSION_TTL_SECONDS: "86400"
+      SHUTDOWN_TIMEOUT_MS: "10000"
+      ENABLE_MOCK_FALLBACK: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - opsmaster-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/livez"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Service 5: Clinical DevOps Assistant (FastAPI)
+  clinical-devops-assistant:
+    build:
+      context: ./services/clinical-devops-assistant
+      dockerfile: Dockerfile
+    container_name: clinical-devops-assistant
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: "8083"
+      DATABASE_URL: "postgresql+asyncpg://postgres:postgrespassword@postgres:5432/clinical_db"
+      VITALS_INGRESS_URL: "http://vitals-ingress-api:8080"
+      ALERT_ENGINE_URL: "http://alert-rules-engine:8081"
+      SESSION_ROUTER_URL: "http://session-router:8082"
+      SHUTDOWN_TIMEOUT_SECONDS: "10"
+      ENABLE_SQLITE_FALLBACK: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - opsmaster-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/livez"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Service 4: k6 Sensor Simulator (Canary Load Generator)
+  k6-sensor-simulator:
+    build:
+      context: ./services/k6-sensor-simulator
+      dockerfile: Dockerfile
+    container_name: k6-sensor-simulator
+    environment:
+      TARGET_URL: "http://vitals-ingress-api:8080/api/v1/telemetry"
+      VIRTUAL_DEVICES: "1000"
+      INJECT_ANOMALIES: "false"
+      INJECT_LATENCY: "false"
+      INJECT_MALFORMED_RATE: "0.0"
+    depends_on:
+      vitals-ingress-api:
+        condition: service_healthy
+    networks:
+      - opsmaster-net
+    profiles:
+      - loadtest
+
+networks:
+  opsmaster-net:
+    driver: bridge
