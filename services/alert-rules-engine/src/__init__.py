@@ -1,1 +1,0 @@
-# alert-rules-engine package
