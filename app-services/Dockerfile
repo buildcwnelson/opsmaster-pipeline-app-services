@@ -17,10 +17,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /app/app-engine ./cmd/server
 
 # Stage 2: Minimal, HIPAA-hardened runtime stage
-FROM alpine:3.20
+FROM alpine:latest
 
-# Install minimal certificates and utilities
-RUN apk add --no-cache ca-certificates tzdata curl && \
+# Install security updates, certificates, and utilities
+RUN apk update && \
+    apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates tzdata curl && \
     rm -rf /var/cache/apk/*
 
 WORKDIR /app

@@ -14,9 +14,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -extldflags '-static'" \
     -o /app/app-engine ./cmd/server
 
-FROM alpine:3.20
+FROM alpine:latest
 
-RUN apk add --no-cache ca-certificates tzdata curl && \
+RUN apk update && \
+    apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates tzdata curl && \
     rm -rf /var/cache/apk/*
 
 WORKDIR /app

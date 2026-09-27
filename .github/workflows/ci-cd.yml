@@ -119,6 +119,7 @@ jobs:
           # Fail pipeline if vulnerabilities at or above severity-cutoff are found
           fail-build: true
           severity-cutoff: high
+          only-fixed: true
           output-format: sarif
         continue-on-error: false
 
